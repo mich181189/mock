@@ -13,6 +13,9 @@ import shutil
 from . import util
 from .exception import PkgError
 from .trace_decorator import getLog, traceLog
+from .buildroot import Buildroot
+from .state import State
+from .mounts import BindMountPoint
 
 
 class Commands(object):
@@ -147,9 +150,26 @@ class Commands(object):
     @traceLog()
     def installSrpmDeps(self, *srpms):
         """Figure out deps from srpm. Call package manager to install them"""
+        tempBuildrootConfig = self.buildroot.config
+        tempBuildrootConfig['unique-ext'] = 'Assembly'
+        tempBuildrootConfig['chroot_setup_cmd'] = 'install @core'
+        
+        innerState = State()
+        innerState.start("run")
+        tempBuildroot = Buildroot(tempBuildrootConfig, self.buildroot.uid_manager, innerState, self.buildroot.plugins)
+
         try:
             self.uid_manager.becomeUser(0, 0)
-
+            
+            innerMount = tempBuildroot.make_chroot_path(self.buildroot.make_chroot_path())
+            util.mkdirIfAbsent(innerMount)
+            tempBuildroot.mounts.managed_mounts.append(
+                    BindMountPoint(self.buildroot.make_chroot_path(), innerMount)
+                )
+            tempBuildroot.initialize()
+            tempBuildroot.pkg_manager.install('dnf', 'dnf-command(builddep)')
+            self.buildroot.pkg_manager.outerBuildroot = tempBuildroot
+            
             # first, install pre-existing deps and configured additional ones
             deps = list(self.buildroot.preexisting_deps)
             for hdr in util.yieldSrpmHeaders(srpms, plainRpmOk=1):
@@ -161,6 +181,9 @@ class Commands(object):
             # install actual build dependencies
             self.buildroot.pkg_manager.builddep(*srpms, check=True)
         finally:
+            self.buildroot.pkg_manager.outerBuildroot = None
+            tempBuildroot.finalize()
+            tempBuildroot.delete()
             self.uid_manager.restorePrivs()
 
     @traceLog()

@@ -51,6 +51,7 @@ class _PackageManager(object):
     command = None
     builddep_command = None
     resolvedep_command = None
+    outerBuildroot = None
 
     @traceLog()
     def __init__(self, config, buildroot, plugins):
@@ -109,7 +110,10 @@ class _PackageManager(object):
             kwargs['pty'] = kwargs.get('pty', True)
         self.buildroot.nuke_rpm_db()
         try:
-            out = util.do(invocation, env=env, **kwargs)
+            if self.outerBuildroot is None:
+                out = util.do(invocation, env=env, **kwargs)
+            else:
+                out = util.do(invocation, env=env, chrootPath=self.outerBuildroot.make_chroot_path(), **kwargs)
         except Error as e:
             raise YumError(str(e))
         self.plugins.call_hooks("postyum")
